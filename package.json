@@ -1,0 +1,61 @@
+{
+  "name": "@mcp-index/mastra",
+  "version": "0.1.2",
+  "description": "Fail-closed mcpindex trust gate for Mastra agents - check MCP tools before your agent calls them.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "mastra",
+    "mcp",
+    "model-context-protocol",
+    "mcpindex",
+    "agent",
+    "tools",
+    "trust",
+    "guardrails",
+    "security"
+  ],
+  "homepage": "https://mcpindex.ai",
+  "author": "Bhartis LLC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mcpindex-ai/mcpindex-mastra.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mcpindex-ai/mcpindex-mastra/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.js\"",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "peerDependencies": {
+    "@mastra/core": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mastra/core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@mastra/core": "^1.51.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
