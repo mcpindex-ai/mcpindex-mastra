@@ -143,3 +143,60 @@ test('a shared client is reused (cache shared across gate calls)', async () => {
   await gate({ toolName: 'send_email' });
   assert.equal(calls, 1);
 });
+
+// --- the hook must be total: a throwing consumer callback never crashes it ---
+
+test('a throwing onVerdict does not crash the hook (warn proceeds)', async () => {
+  const gate = mcpindexGate({
+    serverId: 'acme',
+    fetchImpl: fetchReturning('UNVERIFIED'),
+    logger: () => {},
+    onVerdict: () => {
+      throw new Error('boom');
+    },
+  });
+  const result = await gate({ toolName: 'send_email' }); // must resolve, not reject
+  assert.equal(result, undefined);
+});
+
+test('a throwing blockedOutput under enforce still blocks with the default output', async () => {
+  const gate = mcpindexGate({
+    serverId: 'acme',
+    policy: 'enforce',
+    fetchImpl: fetchReturning('DENY'),
+    logger: () => {},
+    blockedOutput: () => {
+      throw new Error('boom');
+    },
+  });
+  const result = await gate({ toolName: 'send_email' });
+  assert.ok(result, 'still blocked');
+  assert.equal(result.proceed, false);
+  assert.match(String(result.output), /blocked tool "send_email"/); // fell back to default
+});
+
+test('a throwing logger does not crash the hook (block still returned)', async () => {
+  const gate = mcpindexGate({
+    serverId: 'acme',
+    policy: 'enforce',
+    fetchImpl: fetchReturning('UNVERIFIED'),
+    logger: () => {
+      throw new Error('boom');
+    },
+  });
+  const result = await gate({ toolName: 'send_email' });
+  assert.ok(result);
+  assert.equal(result.proceed, false);
+});
+
+test('a throwing logger does not crash the hook (warn proceeds)', async () => {
+  const gate = mcpindexGate({
+    serverId: 'acme',
+    fetchImpl: fetchReturning('UNVERIFIED'),
+    logger: () => {
+      throw new Error('boom');
+    },
+  });
+  const result = await gate({ toolName: 'send_email' });
+  assert.equal(result, undefined);
+});

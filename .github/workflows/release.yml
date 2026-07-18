@@ -17,19 +17,28 @@ permissions:
   contents: read
   id-token: write # required for npm Trusted Publishing (OIDC) + provenance
 
+# Serialize releases: two tag pushes close together publish predictably in order
+# rather than racing. Never cancel a publish already in flight.
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to commit SHAs: this job holds id-token: write and publish
+      # rights, so a moved tag on a dependency must not silently run new code here.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
       # Trusted Publishing requires npm >= 11.5.1; the Node-bundled npm is older.
-      - run: npm install -g npm@latest
+      # Pinned (not @latest) so an OIDC-privileged job never pulls an unvetted npm.
+      - run: npm install -g npm@11.11.0
 
       - run: npm ci
 

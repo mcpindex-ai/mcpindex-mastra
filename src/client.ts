@@ -5,6 +5,10 @@
  * network error, timeout, non-2xx, or unparseable body resolves to a synthetic
  * `UNVERIFIED`/`ERROR` verdict rather than throwing. The gate that consumes this
  * treats "couldn't verify" the same as "not verified", never silently trusting.
+ *
+ * Verdicts are deep-frozen before they leave the client, so a consumer that
+ * mutates one (e.g. in an onVerdict hook) cannot corrupt a cached entry and turn
+ * a REVIEW into an ALLOW on the next cache hit.
  */
 
 import type { TrustVerdict, Directive, VerdictStatus } from './types.js';
@@ -24,7 +28,7 @@ export interface TrustClientOptions {
   timeoutMs?: number;
   /** Verdict cache TTL in milliseconds. Default 60000. Set 0 to disable. */
   cacheTtlMs?: number;
-  /** Max cached verdicts before oldest-out eviction. Default 1024. */
+  /** Max cached verdicts before oldest-out eviction. Default 1024. Clamped to >= 1. */
   maxCacheEntries?: number;
   /** Override the fetch implementation (tests, custom agents). Default global `fetch`. */
   fetchImpl?: typeof fetch;
@@ -34,13 +38,22 @@ export interface TrustClientOptions {
   userAgent?: string;
 }
 
+/** Deep-freeze a verdict so callers cannot mutate a cached/shared instance. */
+function freezeVerdict(v: TrustVerdict): TrustVerdict {
+  Object.freeze(v.subject);
+  for (const d of v.dimensions) Object.freeze(d);
+  Object.freeze(v.dimensions);
+  Object.freeze(v.honest_limits);
+  return Object.freeze(v);
+}
+
 /** Build a synthetic fail-closed verdict. `reason` is surfaced in `honest_limits`. */
 export function failClosedVerdict(
   serverId: string,
   toolName: string | null,
   reason: string,
 ): TrustVerdict {
-  return {
+  return freezeVerdict({
     subject: { server_id: serverId, tool_name: toolName },
     status: 'ERROR' satisfies VerdictStatus,
     directive: 'UNVERIFIED' satisfies Directive,
@@ -49,7 +62,7 @@ export function failClosedVerdict(
     expires_at: null,
     honest_limits: [reason],
     verdict_contract_version: 'unknown',
-  };
+  });
 }
 
 /** Narrow an unknown JSON body to a TrustVerdict, or return null if it is not one. */
@@ -63,7 +76,7 @@ function coerceVerdict(body: unknown): TrustVerdict | null {
   if (!KNOWN_DIRECTIVES.has(b.directive) || !KNOWN_STATUSES.has(b.status)) return null;
   if (typeof b.subject !== 'object' || b.subject === null) return null;
   // Trust the contract for the rest; missing arrays default to empty.
-  return {
+  return freezeVerdict({
     subject: b.subject as TrustVerdict['subject'],
     status: b.status as VerdictStatus,
     directive: b.directive as Directive,
@@ -73,7 +86,7 @@ function coerceVerdict(body: unknown): TrustVerdict | null {
     honest_limits: Array.isArray(b.honest_limits) ? (b.honest_limits as string[]) : [],
     verdict_contract_version:
       typeof b.verdict_contract_version === 'string' ? b.verdict_contract_version : 'unknown',
-  };
+  });
 }
 
 interface CacheEntry {
@@ -93,18 +106,20 @@ export class TrustClient {
   private readonly now: () => number;
   private readonly userAgent: string;
   private readonly cache = new Map<string, CacheEntry>();
+  /** In-flight requests, keyed by cacheKey, for single-flight coalescing. */
+  private readonly inflight = new Map<string, Promise<TrustVerdict>>();
 
   constructor(options: TrustClientOptions = {}) {
     this.apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
-    this.maxCacheEntries = options.maxCacheEntries ?? DEFAULT_MAX_CACHE_ENTRIES;
+    this.maxCacheEntries = Math.max(1, Math.floor(options.maxCacheEntries ?? DEFAULT_MAX_CACHE_ENTRIES));
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.now = options.now ?? Date.now;
     this.userAgent = options.userAgent ?? '@mcp-index/mastra';
     if (typeof this.fetchImpl !== 'function') {
       throw new TypeError(
-        'No fetch implementation available. Pass `fetchImpl` or run on Node >= 18.',
+        'No fetch implementation available. Pass `fetchImpl` or run on Node >= 20.',
       );
     }
   }
@@ -141,8 +156,27 @@ export class TrustClient {
       if (hit) this.cache.delete(key); // reclaim the expired entry
     }
 
-    const verdict = await this.fetchVerdict(path, serverId, toolName);
+    // Single-flight: coalesce concurrent identical lookups so a burst of tool
+    // calls for the same (server, tool) issues one fetch, not N.
+    const existing = this.inflight.get(key);
+    if (existing) return existing;
 
+    const p = this.fetchAndCache(path, serverId, toolName, key);
+    this.inflight.set(key, p);
+    try {
+      return await p;
+    } finally {
+      this.inflight.delete(key);
+    }
+  }
+
+  private async fetchAndCache(
+    path: string,
+    serverId: string,
+    toolName: string | null,
+    key: string,
+  ): Promise<TrustVerdict> {
+    const verdict = await this.fetchVerdict(path, serverId, toolName);
     // Only cache real (non-fail-closed) verdicts, so a transient outage does not
     // pin an UNVERIFIED result for the whole TTL.
     if (this.cacheTtlMs > 0 && verdict.status !== 'ERROR') {

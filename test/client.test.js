@@ -131,9 +131,19 @@ test('fail-closed on unknown status (enum validation)', async () => {
 });
 
 test('server-scope and tool-scope do not collide in cache', async () => {
+  // Distinct directives per scope: if the keys collided, the second call would
+  // hit the first's cached entry and return the WRONG directive - caught here.
   const bodies = {
-    '/api/v1/trust/tool/acme/x': { ...REAL_VERDICT, directive: 'REVIEW' },
-    '/api/v1/trust/server/acme': { ...REAL_VERDICT, subject: { server_id: 'acme', tool_name: null } },
+    '/api/v1/trust/tool/acme/x': {
+      ...REAL_VERDICT,
+      directive: 'REVIEW',
+      subject: { server_id: 'acme', tool_name: 'x' },
+    },
+    '/api/v1/trust/server/acme': {
+      ...REAL_VERDICT,
+      directive: 'UNVERIFIED',
+      subject: { server_id: 'acme', tool_name: null },
+    },
   };
   const client = new TrustClient({
     fetchImpl: async (url) => {
@@ -143,8 +153,9 @@ test('server-scope and tool-scope do not collide in cache', async () => {
   });
   const tool = await client.checkTool('acme', 'x');
   const server = await client.checkServer('acme');
-  assert.equal(tool.subject.tool_name, 'send_email'); // from tool body
-  assert.equal(server.subject.tool_name, null); // distinct entry, not the tool's
+  assert.equal(tool.directive, 'REVIEW'); // tool-scope entry
+  assert.equal(server.directive, 'UNVERIFIED'); // distinct server-scope entry, not the tool's
+  assert.equal(server.subject.tool_name, null);
 });
 
 test('cache is bounded by maxCacheEntries (oldest evicted)', async () => {
@@ -186,4 +197,79 @@ test('cache entry expires after TTL (injected clock)', async () => {
   t += 100; // expired
   await client.checkTool('acme', 'send_email');
   assert.equal(calls, 2);
+});
+
+test('returned verdict is deep-frozen (mutation cannot corrupt the cache)', async () => {
+  const client = new TrustClient({ fetchImpl: jsonFetch(REAL_VERDICT) });
+  const v1 = await client.checkTool('acme', 'send_email');
+  assert.ok(Object.isFrozen(v1), 'verdict frozen');
+  assert.ok(Object.isFrozen(v1.honest_limits), 'honest_limits frozen');
+  assert.throws(() => {
+    v1.directive = 'ALLOW';
+  }, 'directive reassignment throws in strict mode');
+  assert.throws(() => {
+    v1.honest_limits.push('x');
+  }, 'honest_limits mutation throws');
+  // A later cache hit still returns the original directive, uncorrupted.
+  const v2 = await client.checkTool('acme', 'send_email');
+  assert.equal(v2.directive, 'REVIEW');
+});
+
+test('single-flight: concurrent identical lookups issue one fetch', async () => {
+  let calls = 0;
+  const client = new TrustClient({
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify(REAL_VERDICT), { status: 200 });
+    },
+  });
+  // Fire two without awaiting between them: the second coalesces onto the first.
+  const [a, b] = await Promise.all([
+    client.checkTool('acme', 'send_email'),
+    client.checkTool('acme', 'send_email'),
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(a.directive, 'REVIEW');
+  assert.equal(b.directive, 'REVIEW');
+});
+
+test('single-flight clears after resolution (next call re-fetches on a miss)', async () => {
+  let calls = 0;
+  const client = new TrustClient({
+    cacheTtlMs: 0, // caching off, so only in-flight coalescing is in play
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify(REAL_VERDICT), { status: 200 });
+    },
+  });
+  await client.checkTool('acme', 'send_email');
+  await client.checkTool('acme', 'send_email'); // sequential -> not coalesced
+  assert.equal(calls, 2);
+});
+
+test('maxCacheEntries=1 serves a single cached entry', async () => {
+  let calls = 0;
+  const client = new TrustClient({
+    maxCacheEntries: 1,
+    fetchImpl: async (url) => {
+      calls += 1;
+      const name = new URL(url).pathname.split('/').pop();
+      return new Response(
+        JSON.stringify({ ...REAL_VERDICT, subject: { server_id: 'acme', tool_name: name } }),
+        { status: 200 },
+      );
+    },
+  });
+  await client.checkTool('acme', 't1');
+  await client.checkTool('acme', 't1'); // cached
+  assert.equal(calls, 1);
+  await client.checkTool('acme', 't2'); // evicts t1
+  await client.checkTool('acme', 't1'); // re-fetch
+  assert.equal(calls, 3);
+});
+
+test('degenerate maxCacheEntries (0) does not hang and still resolves', async () => {
+  const client = new TrustClient({ maxCacheEntries: 0, fetchImpl: jsonFetch(REAL_VERDICT) });
+  const v = await client.checkTool('acme', 'send_email');
+  assert.equal(v.directive, 'REVIEW');
 });

@@ -77,7 +77,7 @@ function defaultBlockedOutput(info: GateVerdictInfo): string {
  */
 export function mcpindexGate(options: McpindexGateOptions) {
   const { serverId, policy = 'warn', onVerdict, blockedOutput = defaultBlockedOutput } = options;
-  const log = options.logger ?? ((m: string) => console.warn(m));
+  const userLog = options.logger ?? ((m: string) => console.warn(m));
   const client =
     options.client ??
     new TrustClient({
@@ -87,6 +87,39 @@ export function mcpindexGate(options: McpindexGateOptions) {
       fetchImpl: options.fetchImpl,
     });
 
+  // The gate sits in the agent's hot path; a consumer-supplied callback must
+  // never crash the tool pipeline or drop a block. All three callbacks are
+  // wrapped so the returned hook is total: client.checkTool already never throws.
+  const safeLog = (message: string): void => {
+    try {
+      userLog(message);
+    } catch {
+      /* a throwing logger must not break the gate */
+    }
+  };
+  const emitVerdict = (info: GateVerdictInfo): void => {
+    if (!onVerdict) return;
+    try {
+      onVerdict(info);
+    } catch (err) {
+      safeLog(`[mcpindex] onVerdict callback threw (ignored): ${String(err)}`);
+    }
+  };
+  const buildBlockedOutput = (info: GateVerdictInfo): unknown => {
+    try {
+      return blockedOutput(info);
+    } catch (err) {
+      safeLog(`[mcpindex] blockedOutput callback threw; using default: ${String(err)}`);
+      // The default is provably total today, but keep the block bulletproof
+      // even if a future verdict shape made it throw: never drop the block.
+      try {
+        return defaultBlockedOutput(info);
+      } catch {
+        return `mcpindex blocked tool "${info.toolName}" on server "${info.serverId}": not cleared for use.`;
+      }
+    }
+  };
+
   return async function beforeToolCall(
     context: BeforeToolCallContext,
   ): Promise<BeforeToolCallResult> {
@@ -95,19 +128,22 @@ export function mcpindexGate(options: McpindexGateOptions) {
     const action = directiveToAction(verdict.directive, policy);
     const info: GateVerdictInfo = { serverId, toolName, policy, verdict, action };
 
-    onVerdict?.(info);
+    emitVerdict(info);
 
     if (action === 'block') {
-      log(
+      // Build the substitute output BEFORE logging, so a throwing logger can
+      // never drop the block. buildBlockedOutput has its own fallback.
+      const output = buildBlockedOutput(info);
+      safeLog(
         `[mcpindex] BLOCKED "${toolName}" on "${serverId}" - directive=${verdict.directive}, ` +
           `status=${verdict.status}`,
       );
-      return { proceed: false, output: blockedOutput(info) };
+      return { proceed: false, output };
     }
 
     if (verdict.directive !== 'ALLOW') {
       // warn mode, or ALLOW not yet emitted: proceed but surface the notice.
-      log(
+      safeLog(
         `[mcpindex] tool "${toolName}" on "${serverId}" is ${verdict.directive} ` +
           `(policy=${policy}, allowing). honest_limits: [${verdict.honest_limits.join(', ')}]`,
       );
