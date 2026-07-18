@@ -200,3 +200,22 @@ test('a throwing logger does not crash the hook (warn proceeds)', async () => {
   const result = await gate({ toolName: 'send_email' });
   assert.equal(result, undefined);
 });
+
+test('gate forwards maxCacheEntries to its client (bounded cache)', async () => {
+  let calls = 0;
+  const gate = mcpindexGate({
+    serverId: 'acme',
+    maxCacheEntries: 1,
+    logger: () => {},
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify(verdict('REVIEW')), { status: 200 });
+    },
+  });
+  await gate({ toolName: 't1' });
+  await gate({ toolName: 't1' }); // cached
+  assert.equal(calls, 1);
+  await gate({ toolName: 't2' }); // evicts t1 (cap 1)
+  await gate({ toolName: 't1' }); // re-fetch (was evicted)
+  assert.equal(calls, 3);
+});

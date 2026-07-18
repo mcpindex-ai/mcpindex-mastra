@@ -80,6 +80,7 @@ mcpindexGate({
   serverId: 'your-mcp-server-id', // required
   policy: 'warn',                 // 'warn' (default) | 'enforce'
   cacheTtlMs: 60_000,             // verdict cache (default 60s); 0 disables
+  maxCacheEntries: 1024,          // cap cached verdicts (oldest evicted)
   timeoutMs: 3_000,               // per-request timeout (default 3s)
   apiBase: 'https://mcpindex.ai', // override for self-hosting/testing
   onVerdict: ({ toolName, verdict, action }) => {/* metrics/logging */},

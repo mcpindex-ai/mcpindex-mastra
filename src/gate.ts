@@ -41,6 +41,10 @@ export interface McpindexGateOptions {
   timeoutMs?: number;
   /** Verdict cache TTL ms. Ignored if `client` is passed. Default 60000. */
   cacheTtlMs?: number;
+  /** Max cached verdicts before oldest-out eviction. Ignored if `client` is passed. Default 1024. */
+  maxCacheEntries?: number;
+  /** User-Agent header on requests. Ignored if `client` is passed. */
+  userAgent?: string;
   /** Override fetch. Ignored if `client` is passed. */
   fetchImpl?: typeof fetch;
   /** Called after every verdict, whatever the action. Use for logging/metrics. */
@@ -84,6 +88,8 @@ export function mcpindexGate(options: McpindexGateOptions) {
       apiBase: options.apiBase,
       timeoutMs: options.timeoutMs,
       cacheTtlMs: options.cacheTtlMs,
+      maxCacheEntries: options.maxCacheEntries,
+      userAgent: options.userAgent,
       fetchImpl: options.fetchImpl,
     });
 
