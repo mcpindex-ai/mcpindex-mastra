@@ -1,5 +1,8 @@
 # @mcp-index/mastra
 
+Built on [mcpindex.ai](https://mcpindex.ai) - the drift-monitored MCP server index
+with an in-path trust gate for agent tool calls.
+
 A fail-closed trust gate for [Mastra](https://mastra.ai) agents. Before your agent
 invokes an MCP tool, it asks [mcpindex](https://mcpindex.ai) whether that tool has
 been vetted, and warns you (or blocks the call) based on the answer.

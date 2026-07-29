@@ -1,7 +1,7 @@
 {
   "name": "@mcp-index/mastra",
-  "version": "0.1.4",
-  "description": "Fail-closed mcpindex trust gate for Mastra agents - check MCP tools before your agent calls them.",
+  "version": "0.1.5",
+  "description": "Fail-closed mcpindex trust gate for Mastra agents - check MCP tools against mcpindex.ai, the drift-monitored MCP server index, before your agent calls them.",
   "type": "module",
   "license": "MIT",
   "keywords": [
