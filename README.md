@@ -25,6 +25,10 @@ npm i @mcp-index/mastra
 
 Requires Node >= 20 and `@mastra/core >= 1.0.0` (you already have it).
 
+The gate starts in `warn` mode, which logs and never blocks a tool call. `enforce`
+blocks every tool call until mcpindex has allow-list coverage for your server, as
+the Honest limits section explains.
+
 ## Use
 
 ```ts
